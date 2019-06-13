@@ -12,7 +12,7 @@ from .utils import adjust_shift_variance
 def mnn_correct(*datas, var_index=None, var_subset=None, batch_key='batch', index_unique='-',
                 batch_categories=None, k=20, sigma=1., cos_norm_in=True, cos_norm_out=True,
                 svd_dim=None, var_adj=True, compute_angle=False, mnn_order=None, svd_mode='rsvd',
-                do_concatenate=True, save_raw=False, n_jobs=None, **kwargs):
+                do_concatenate=True, save_raw=False, n_jobs=None, n_pca_components=None, **kwargs):
     """
     Apply MNN correct to input data matrices or AnnData objects. Depending on do_concatenate,
     returns matrices or AnnData objects in the original order containing corrected expression
@@ -88,6 +88,9 @@ def mnn_correct(*datas, var_index=None, var_subset=None, batch_key='batch', inde
     :param n_jobs: `int` or `None`, optional (default: None)
         The number of jobs. When set to None, automatically uses the number of cores.
 
+    :param n_components: `int` or `None`, optional (default: None)
+        Number of PCA components. If specified, MNNs will be compputed in the PC space
+
     :param kwargs: `dict` or `None`, optional (default: None)
         optional keyword arguments for irlb.
 
@@ -123,7 +126,8 @@ def mnn_correct(*datas, var_index=None, var_subset=None, batch_key='batch', inde
                                 var_subset=var_subset, k=k, sigma=sigma, cos_norm_in=cos_norm_in,
                                 cos_norm_out=cos_norm_out, svd_dim=svd_dim, var_adj=var_adj,
                                 compute_angle=compute_angle, mnn_order=mnn_order,
-                                svd_mode=svd_mode, do_concatenate=do_concatenate, **kwargs)
+                                svd_mode=svd_mode, do_concatenate=do_concatenate,
+                                n_pca_components=n_pca_components, **kwargs)
         print('Packing AnnData object...')
         if do_concatenate:
             adata = AnnData.concatenate(*datas, batch_key=batch_key,
@@ -176,7 +180,7 @@ def mnn_correct(*datas, var_index=None, var_subset=None, batch_key='batch', inde
             new_batch_out = out_batches[target]
         print('  Looking for MNNs...')
         mnn_ref, mnn_new = find_mutual_nn(data1=ref_batch_in, data2=new_batch_in, k1=k, k2=k,
-                                          n_jobs=n_jobs)
+                                          n_jobs=n_jobs, n_pca_components=n_pca_components)
         print('  Computing correction vectors...')
         correction_in = compute_correction(ref_batch_in, new_batch_in, mnn_ref, mnn_new,
                                            new_batch_in, sigma)

@@ -2,13 +2,15 @@ import math
 import numpy as np
 from multiprocessing import Pool
 from scipy.spatial import cKDTree
+from sklearn.neighbors import NearestNeighbors
 from scipy.linalg import orth
 from scipy.linalg.interpolative import svd as rsvd
-from scipy.sparse import issparse
+from scipy.sparse import issparse, find
 from numba import jit, float32, int32, int8
 from . import settings
 from .irlb import lanczos
-
+from sklearn.metrics import pairwise_distances
+from sklearn.decomposition import PCA
 
 
 @jit(float32[:](float32[:, :]), nogil=True)
@@ -21,13 +23,13 @@ def scale_rows(in_matrix, scale_vector):
     return np.divide(in_matrix, scale_vector)
 
 
-@jit(float32[:, :](float32[:, :], float32[:, :]))
-def kdist(m, n):
-    dist = np.zeros((m.shape[0], n.shape[0]), dtype=np.float32)
-    for i in range(m.shape[0]):
-        for j in range(n.shape[0]):
-            dist[i, j] = np.dot(m[i], n[j])
-    return dist
+# @jit(float32[:, :](float32[:, :], float32[:, :]))
+# def kdist(m, n):
+#     dist = np.zeros((m.shape[0], n.shape[0]), dtype=np.float32)
+#     for i in range(m.shape[0]):
+#         for j in range(n.shape[0]):
+#             dist[i, j] = np.dot(m[i], n[j])
+#     return dist
 
 
 def transform_input_data(datas, cos_norm_in, cos_norm_out, var_index, var_subset, n_jobs):
@@ -85,17 +87,42 @@ def transform_input_data(datas, cos_norm_in, cos_norm_out, var_index, var_subset
     return in_batches, out_batches, var_sub_index, same_set
 
 
-@jit((float32[:, :], float32[:, :], int8, int8, int8))
-def find_mutual_nn(data1, data2, k1, k2, n_jobs):
-    k_index_1 = cKDTree(data1).query(x=data2, k=k1, n_jobs=n_jobs)[1]
-    k_index_2 = cKDTree(data2).query(x=data1, k=k2, n_jobs=n_jobs)[1]
-    mutual_1 = []
-    mutual_2 = []
-    for index_2 in range(data2.shape[0]):
-        for index_1 in k_index_1[index_2]:
-            if index_2 in k_index_2[index_1]:
-                mutual_1.append(index_1)
-                mutual_2.append(index_2)
+@jit((float32[:, :], float32[:, :], int8, int8, int8, int8))
+def find_mutual_nn(data1, data2, k1, k2, n_jobs, n_pca_components=None):
+    # k_index_1 = cKDTree(data1).query(x=data2, k=k1, n_jobs=n_jobs)[1]
+    # k_index_2 = cKDTree(data2).query(x=data1, k=k2, n_jobs=n_jobs)[1]
+    # mutual_1 = []
+    # mutual_2 = []
+    # for index_2 in range(data2.shape[0]):
+    #     for index_1 in k_index_1[index_2]:
+    #         if index_2 in k_index_2[index_1]:
+    #             mutual_1.append(index_1)
+    #             mutual_2.append(index_2)
+    # return mutual_1, mutual_2
+
+    # Run PCA if specified
+    if n_pca_components is not None:
+        print('       in PC space...')
+        data = np.vstack([data1, data2])
+        pca = PCA(n_components=n_pca_components, svd_solver='randomized')
+        pca_projections = pca.fit_transform(data)
+        data1 = pca_projections[:data1.shape[0], :]
+        data2 = pca_projections[data1.shape[0]:, :]
+
+    nbrs = NearestNeighbors(n_neighbors=k1,
+                            metric='euclidean', n_jobs=n_jobs)
+    nbrs.fit(data1)
+    t1_nbrs = nbrs.kneighbors_graph(data2)
+
+    nbrs = NearestNeighbors(n_neighbors=k2,
+                            metric='euclidean', n_jobs=n_jobs)
+    nbrs.fit(data2)
+    t2_nbrs = nbrs.kneighbors_graph(data1)
+
+    # Mututally nearest neighbors
+    mnn = t2_nbrs.multiply(t1_nbrs.T)
+    mutual_1, mutual_2, _ = find(mnn)
+
     return mutual_1, mutual_2
 
 
@@ -107,7 +134,8 @@ def compute_correction(data1, data2, mnn1, mnn2, data2_or_raw2, sigma):
     for index, ve in zip(mnn2, vect):
         vect_reduced[index] += ve
     vect_avg = np.divide(vect_reduced[mnn_index], mnn_count.astype(np.float32)[:, None])
-    exp_distance = np.exp(-kdist(data2_or_raw2, data2_or_raw2[mnn_index]) / sigma)
+    # exp_distance = np.exp(-kdist(data2_or_raw2, data2_or_raw2[mnn_index]) / sigma)
+    exp_distance = np.exp(-pairwise_distances(data2_or_raw2, data2_or_raw2[mnn_index]) / sigma)
     density = np.sum(exp_distance[mnn_index], axis=0)
     mult = np.divide(exp_distance, density)
     total_prob = np.sum(mult, axis=1, keepdims=True)
